@@ -1,0 +1,13 @@
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+xgboost>=2.0
+torch>=2.0
+shap>=0.44
+dask[complete]>=2024.1
+ray[tune]>=2.9
+matplotlib>=3.7
+seaborn>=0.13
+jupyter>=1.0
+pyyaml>=6.0
+pytest>=8.0
