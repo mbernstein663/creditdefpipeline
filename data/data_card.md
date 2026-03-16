@@ -7,6 +7,7 @@
 **Columns:** 150+ features  
 
 ## Key Features Used
+
 | Feature | Description |
 |---|---|
 | `loan_amnt` | Requested loan amount |
@@ -19,10 +20,13 @@
 | `revol_util` | Revolving credit utilization rate |
 
 ## Target Variable
+
 `loan_status` is binarized:  
+
 - `1` = Default (Charged Off)  
 - `0` = Repaid (Fully Paid)
 
 ## Notes
+
 - Raw data is excluded from version control (see `.gitignore`)
 - To reproduce: download from Kaggle and place in `data/raw/`
