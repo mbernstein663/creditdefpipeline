@@ -1,3 +1,17 @@
+# Data files — too large for GitHub
+data/raw/
+data/processed/
+data/features/
+*.csv
+*.parquet
+*.zip
+
+# Model files
+*.pkl
+*.joblib
+*.h5
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
