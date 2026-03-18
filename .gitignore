@@ -219,3 +219,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+src/models/*.parquet
+src/models/*.joblib
+src/models/*.pt

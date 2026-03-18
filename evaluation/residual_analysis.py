@@ -11,10 +11,17 @@ with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
 
 import joblib
+import pandas as pd
+
+SEED = config["model"]["random_seed"]
 
 model = joblib.load("src/models/xgboost_model.joblib")
 optimal_threshold = joblib.load("src/models/optimal_threshold.joblib")
-print(f"Model loaded. Threshold: {optimal_threshold:.2f}")
+X_test = pd.read_parquet("src/models/X_test.parquet")
+y_test = pd.read_parquet("src/models/y_test.parquet")["default"]
+print(f"Loaded model, threshold: {optimal_threshold:.2f}, test rows: {len(X_test):,}")
+
+
 
 # Build residuals dataframe
 p_default = model.predict_proba(X_test)[:, 1]

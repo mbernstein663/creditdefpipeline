@@ -1,11 +1,8 @@
 # creditdefpipeline
+
 End-to-end credit risk decision engine with ML pipeline and profit optimization.
 
-
-
-
-
-### Feedback + Errors::
+## Feedback + Errors
 
 Our original analysis yielded a contextually valid SHAP analysis but poor calibration analysis. Our results yielded:
 
@@ -22,4 +19,36 @@ Predicted 0.74 → Actual 0.43 (overpredicting by 0.31)
 Predicted 0.83 → Actual 0.57 (overpredicting by 0.26)
 Predicted 0.91 → Actual 0.75 (overpredicting by 0.16)
 
-Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was beign too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins. 
+Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was beign too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins.
+
+--- Residual Analysis ---
+
+Mean residual by DTI bucket (negative = overpredicting default):
+dti_bucket
+0-10    -0.2288
+10-20   -0.2472
+20-30   -0.2739
+30-40   -0.2908
+40+     -0.2944
+
+Mean residual by FICO bucket:
+fico_bucket
+620-660   -0.2874
+660-700   -0.2785
+700-740   -0.2269
+740+      -0.1629
+
+Mean residual by term:
+term
+36   -0.2411
+60   -0.3033
+
+Overall mean residual: -0.2561
+Residual analysis complete.
+
+Our residual analysis corroborates this. The mean residual error overly penalizes by dti buckts, terms, and fico buckets. (i.e. the model tells us for 60-year term `actual default probability` - `estimated default probability` = -0.30, meaning the actual default rate was 30% lower than we estimated)
+The model shows clear indication of over-conservative defaulting estimates- which could lead to significant profit reduction. We will troubleshoot this by analyzing class imbalances (there are less defaulters than non-defaulters, which may be affecting model results).
+
+2) Model retraining
+
+In initial coding, we used model retraining and test/train re-splitting at each stage. We adapted and changed to .joblib and .pt structure in \src\models to preserve reproducibility and save time.
