@@ -34,8 +34,18 @@ profit by **$99.5M (2.6x improvement)** on the held-out test set.
 - At optimal threshold, ~33% of applicants are approved
 - Using 0.50 as threshold leaves $99.5M on the table
 
-## Next Steps
+## SHAP Feature Importance (Business Translation)
 
-- SHAP analysis for feature importance and business translation
-- Hyperparameter tuning with Ray Tune (estimated +1-2 AUC points)
-- Ensemble modeling combining all three classifiers
+| Feature | Avg Impact Per Loan |
+
+|---|---|
+
+| Interest rate | $3,968 |
+| Loan term | $1,999 |
+| Debt-to-income ratio | $1,379 |
+| FICO score | $1,221 |
+| Loan-to-income ratio | $908 |
+
+Key finding: Interest rate is the strongest predictor of default,
+likely because LendingClub already prices risk into the rate, 
+making it both a cause and a signal of default risk.
