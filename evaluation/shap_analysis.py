@@ -102,3 +102,40 @@ for feat in top_features:
     print(f"{feat:30s} → avg SHAP {avg_impact:.4f} → ~${dollar_impact:,.0f} impact per loan")
 
 print("\nSHAP analysis complete.")
+
+
+
+
+
+from sklearn.calibration import calibration_curve
+
+print("\n--- Calibration Check ---")
+prob_true, prob_pred = calibration_curve(
+    y_test, 
+    model.predict_proba(X_test)[:, 1], 
+    n_bins=10
+)
+
+plt.figure(figsize=(7, 5))
+plt.plot(prob_pred, prob_true, marker="o", color="#4C9BE8", 
+         linewidth=2, label="XGBoost")
+plt.plot([0, 1], [0, 1], linestyle="--", color="#888", 
+         linewidth=1, label="Perfect calibration")
+plt.xlabel("Mean predicted probability")
+plt.ylabel("Fraction of actual defaults")
+plt.title("Calibration curve — predicted vs actual default rate")
+plt.legend()
+plt.tight_layout()
+plt.savefig(config["paths"]["plots_dir"] + "calibration.png", 
+            dpi=150, bbox_inches="tight")
+plt.close()
+
+# Quantify calibration error
+from sklearn.metrics import brier_score_loss
+brier = brier_score_loss(y_test, model.predict_proba(X_test)[:, 1])
+print(f"Brier score: {brier:.4f} (lower is better, 0.25 = random)")
+
+for pred, true in zip(prob_pred, prob_true):
+    diff = true - pred
+    direction = "underpredicting" if diff > 0 else "overpredicting"
+    print(f"Predicted {pred:.2f} → Actual {true:.2f} ({direction} by {abs(diff):.2f})")
