@@ -10,29 +10,11 @@ import os
 with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
 
-SEED = config["model"]["random_seed"]
+import joblib
 
-df = pd.read_parquet(config["data"]["features_dir"] + "features.parquet")
-X = df.drop(columns=["default"])
-y = df["default"]
-
-X_temp, X_test, y_temp, y_test = train_test_split(
-    X, y, test_size=config["model"]["test_size"],
-    random_state=SEED, stratify=y
-)
-X_train, X_val, y_train, y_val = train_test_split(
-    X_temp, y_temp, test_size=config["model"]["val_size"],
-    random_state=SEED, stratify=y_temp
-)
-
-model = xgb.XGBClassifier(
-    n_estimators=300, max_depth=5, learning_rate=0.05,
-    subsample=0.8, colsample_bytree=0.8,
-    scale_pos_weight=(y_train==0).sum()/(y_train==1).sum(),
-    random_state=SEED, eval_metric="auc",
-    early_stopping_rounds=20, verbosity=0
-)
-model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+model = joblib.load("src/models/xgboost_model.joblib")
+optimal_threshold = joblib.load("src/models/optimal_threshold.joblib")
+print(f"Model loaded. Threshold: {optimal_threshold:.2f}")
 
 # Build residuals dataframe
 p_default = model.predict_proba(X_test)[:, 1]
