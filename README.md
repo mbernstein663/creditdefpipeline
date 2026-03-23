@@ -19,7 +19,7 @@ Predicted 0.74 → Actual 0.43 (overpredicting by 0.31)
 Predicted 0.83 → Actual 0.57 (overpredicting by 0.26)
 Predicted 0.91 → Actual 0.75 (overpredicting by 0.16)
 
-Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was beign too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins.
+Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was beibg too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins.
 
 --- Residual Analysis ---
 
@@ -46,8 +46,16 @@ term
 Overall mean residual: -0.2561
 Residual analysis complete.
 
-Our residual analysis corroborates this. The mean residual error overly penalizes by dti buckts, terms, and fico buckets. (i.e. the model tells us for 60-year term `actual default probability` - `estimated default probability` = -0.30, meaning the actual default rate was 30% lower than we estimated)
+Our residual analysis corroborates this. The mean residual error overly penalizes by dti buckets, term length, and fico buckets. (i.e. the model tells us for 60-year term `actual default probability` - `estimated default probability` = -0.30, meaning the actual default rate was 30% lower than we estimated)
 The model shows clear indication of over-conservative defaulting estimates- which could lead to significant profit reduction. We will troubleshoot this by analyzing class imbalances (there are less defaulters than non-defaulters, which may be affecting model results).
+
+We fixed this by including class calibration, which adjusts the predicions ...
+This yielded the following calibration curves:
+
+We can see that the calibrated data is fitting extremely well until the probabilities get high- this calibrated model is overfitting because we are using the same data for calbration and did not create an additional calibration set.
+
+
+
 
 2) Model retraining
 
