@@ -51,6 +51,8 @@ The model shows clear indication of over-conservative defaulting estimates- whic
 
 We fixed this by including class calibration, which adjusts the predicions ...
 This yielded the following calibration curves:
+![Calibration Plot](evaluation/plots/calibration_curve.png)
+
 
 We can see that the calibrated data is fitting extremely well until the probabilities get high- this calibrated model is overfitting because we are using the same data for calbration and did not create an additional calibration set.
 
