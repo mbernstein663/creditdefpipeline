@@ -2,6 +2,10 @@
 
 End-to-end credit risk decision engine with ML pipeline and profit optimization.
 
+## The Model Setup
+
+## The Model Results
+
 ## Feedback + Errors
 
 Our original analysis yielded a contextually valid SHAP analysis but poor calibration analysis. Our results yielded:
@@ -19,7 +23,7 @@ Predicted 0.74 → Actual 0.43 (overpredicting by 0.31)
 Predicted 0.83 → Actual 0.57 (overpredicting by 0.26)
 Predicted 0.91 → Actual 0.75 (overpredicting by 0.16)
 
-Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was beibg too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins.
+Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was being too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins.
 
 --- Residual Analysis ---
 
@@ -46,19 +50,49 @@ term
 Overall mean residual: -0.2561
 Residual analysis complete.
 
-Our residual analysis corroborates this. The mean residual error overly penalizes by dti buckets, term length, and fico buckets. (i.e. the model tells us for 60-year term `actual default probability` - `estimated default probability` = -0.30, meaning the actual default rate was 30% lower than we estimated)
+Our residual analysis corroborates this. The mean residual error overly penalizes by dti buckets, term length, and fico buckets. (i.e. the model tells us for 60-year term `actual default probability` - `estimated default probability` = -0.30, meaning the actual default rate was 30% lower than we estimated).
 The model shows clear indication of over-conservative defaulting estimates- which could lead to significant profit reduction. We will troubleshoot this by analyzing class imbalances (there are less defaulters than non-defaulters, which may be affecting model results).
 
 We fixed this by including class calibration, which adjusts the predicions ...
 This yielded the following calibration curves:
 ![Calibration Plot](evaluation/plots/calibration_curve.png)
 
-
 We can see that the calibrated data is fitting extremely well until the probabilities get high- this calibrated model is overfitting because we are using the same data for calbration and did not create an additional calibration set.
 
+## Model Development Notes
 
+### Calibration Fix
 
+Initial XGBoost probabilities were systematically overconfident 
+(predicted 0.55 default rate where actual was 0.24). 
 
-2) Model retraining
+Post-calibration results:
+- Brier score: [add updated score]
+- Optimal threshold: 0.34
+- Portfolio profit: $659M (+4.7x vs. uncalibrated)
+
+The profit improvement reflects the uncalibrated model 
+incorrectly rejecting ~57% of profitable loans (86% approval 
+post-calibration vs. 29% pre-calibration).
+
+### Was Calibration Even Necessary?
+
+It turns out that our problem diagnosis was backwards. We misatrributed the 
+
+### What happened?
+
+AUC:              0.7194
+Brier score:      0.1436
+Optimal threshold:0.34
+Approval rate:    86.3%
+Portfolio profit: $741,673,984
+Test set size:    269,062 loans
+
+## Model retraining
 
 In initial coding, we used model retraining and test/train re-splitting at each stage. We adapted and changed to .joblib and .pt structure in \src\models to preserve reproducibility and save time.
+
+# What Was Learned
+
+- A calibration check is a diagnostic tool, not a tell all about underlying errors. Don't jump straight into isotonic/sigmoid calibration methods without performing EDA/hyperparameter searches unless you have a strong AUC. This is because the AUC tells us the probability of ranking a random positive over a random negative (i.e. how frequently is my model saying this [actual 1] is more likely to be a 0 than this [actual 0]- and vice versa). With a strong AUC (let's say, 0.85) the model is mostly (85% of the time) correctly ranking probabilities, meaning the activation function may just need some calibration to properly boost the raw probabilities and correctly assign a 1 or 0.
+- Do not use `scale_pos_weight` ("tipping the scale") unless there is certainty about the distribution of 1s and 0s in the actual target variable. If strong scale adjustment is needed (i.e. there's a very low chance of defaulting, like with fraud) we may want to try anomaly detection as an alternative.
