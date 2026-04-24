@@ -1,28 +1,28 @@
 import os
+import sys
 import yaml
 import joblib
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 from sklearn.frozen import FrozenEstimator
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import train_test_split
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
+from src.engine.profit import (
+    expected_profit_per_loan,
+    portfolio_profit_curve,
+    profit_params,
+)
+
 def load_config(config_path="config.yaml"):
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
-
-
-def profit_params(config):
-    avg_loan = config["profit"]["avg_loan_amount"]
-    int_rate = config["profit"]["avg_interest_rate"]
-    term_yrs = config["profit"]["avg_loan_term_years"]
-    lgd = config["profit"]["loss_given_default"]
-    fn_loss_multiplier = config["profit"].get("false_negative_loss_multiplier", 1.0)
-
-    interest_revenue = avg_loan * int_rate * term_yrs
-    loss_amount = avg_loan * lgd
-    return interest_revenue, loss_amount, fn_loss_multiplier
 
 
 def calibrate_and_save(config):
@@ -78,39 +78,34 @@ def calibrate_and_save(config):
 def optimize_threshold(cal_model, X_test, y_test, config):
     print("Reoptimizing threshold on calibrated probabilities...")
 
-    INTEREST_REVENUE, LOSS_AMOUNT, FN_LOSS_MULTIPLIER = profit_params(config)
+    INTEREST_REVENUE, LOSS_AMOUNT, SERVICE_COST, FN_LOSS_MULTIPLIER = profit_params(config)
 
     p_default = cal_model.predict_proba(X_test)[:, 1]
     y_true = y_test.to_numpy()
 
-    thresholds = np.arange(0.01, 0.99, 0.01)
-    portfolio_profits = []
+    thresholds = np.arange(0.01, 1.01, 0.01)
+    curve = portfolio_profit_curve(
+        p_default,
+        y_true,
+        thresholds,
+        INTEREST_REVENUE,
+        LOSS_AMOUNT,
+        servicing_cost=SERVICE_COST,
+        fn_loss_multiplier=FN_LOSS_MULTIPLIER,
+    )
 
-    for thresh in thresholds:
-        approved = p_default < thresh
-        if approved.sum() == 0:
-            portfolio_profits.append(0)
-            continue
-
-        approved_defaults = y_true[approved] == 1
-        approved_non_defaults = ~approved_defaults
-
-        # Realized profit on held-out data:
-        # non-default approvals earn interest, false-negative defaults incur amplified loss.
-        gains = approved_non_defaults.sum() * INTEREST_REVENUE
-        losses = approved_defaults.sum() * LOSS_AMOUNT * FN_LOSS_MULTIPLIER
-        profit = gains - losses
-        portfolio_profits.append(profit)
-
-    portfolio_profits = np.array(portfolio_profits)
-    optimal_idx = np.argmax(portfolio_profits)
-    optimal_threshold = thresholds[optimal_idx]
-    max_profit = portfolio_profits[optimal_idx]
+    optimal_idx = int(curve["portfolio_profit"].to_numpy().argmax())
+    optimal_threshold = float(curve.loc[optimal_idx, "threshold"])
+    max_profit = float(curve.loc[optimal_idx, "portfolio_profit"])
+    approve_all_profit = float(
+        curve.loc[np.isclose(curve["threshold"], 1.0), "portfolio_profit"].iloc[0]
+    )
 
     joblib.dump(optimal_threshold, "src/models/optimal_threshold_calibrated.joblib")
 
     print(f"New threshold:         {optimal_threshold:.2f}")
     print(f"Max portfolio profit:  ${max_profit:,.0f}")
+    print(f"Profit at 100% approve:${approve_all_profit:,.0f}")
 
     return optimal_threshold, max_profit
 
@@ -122,13 +117,18 @@ def make_decision(loan_features: dict, config_path="config.yaml") -> dict:
     cal_model = joblib.load("src/models/calibrated_xgboost_model.joblib")
     threshold = joblib.load("src/models/optimal_threshold_calibrated.joblib")
 
-    INTEREST_REVENUE, LOSS_AMOUNT, FN_LOSS_MULTIPLIER = profit_params(config)
+    INTEREST_REVENUE, LOSS_AMOUNT, SERVICE_COST, FN_LOSS_MULTIPLIER = profit_params(config)
 
     X = pd.DataFrame([loan_features])
     p_default = float(cal_model.predict_proba(X)[0, 1])
-    expected_profit = (
-        (1 - p_default) * INTEREST_REVENUE
-        - p_default * LOSS_AMOUNT * FN_LOSS_MULTIPLIER
+    expected_profit = float(
+        expected_profit_per_loan(
+            [p_default],
+            INTEREST_REVENUE,
+            LOSS_AMOUNT,
+            servicing_cost=SERVICE_COST,
+            fn_loss_multiplier=FN_LOSS_MULTIPLIER,
+        )[0]
     )
 
     return {

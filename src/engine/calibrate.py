@@ -1,31 +1,29 @@
 # calibrate.py — clean version
 
 import os
+import sys
 import joblib
 import numpy as np
 import pandas as pd
 import yaml
+from pathlib import Path
+import matplotlib
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.model_selection import train_test_split
 from sklearn.frozen import FrozenEstimator
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
+from src.engine.profit import portfolio_profit_curve, profit_params
 
 
 def load_config(path="config.yaml"):
     with open(path) as f:
         return yaml.safe_load(f)
-
-
-def profit_params(config):
-    avg_loan = config["profit"]["avg_loan_amount"]
-    int_rate = config["profit"]["avg_interest_rate"]
-    term_yrs = config["profit"]["avg_loan_term_years"]
-    lgd = config["profit"]["loss_given_default"]
-    fn_loss_multiplier = config["profit"].get("false_negative_loss_multiplier", 1.0)
-
-    interest_revenue = avg_loan * int_rate * term_yrs
-    loss_amount = avg_loan * lgd
-    return interest_revenue, loss_amount, fn_loss_multiplier
 
 
 def build_and_calibrate(config):
@@ -98,37 +96,37 @@ def plot_calibration(base, calibrated, X_test, y_test):
     os.makedirs("evaluation/plots", exist_ok=True)
     plt.tight_layout()
     plt.savefig("evaluation/plots/calibration_curve.png", dpi=150)
-    plt.show()
+    plt.close(fig)
 
 
 def optimize_threshold(calibrated, X_test, y_test, config):
-    INTEREST_REVENUE, LOSS_AMOUNT, FN_LOSS_MULTIPLIER = profit_params(config)
+    INTEREST_REVENUE, LOSS_AMOUNT, SERVICE_COST, FN_LOSS_MULTIPLIER = profit_params(config)
 
     p_default = calibrated.predict_proba(X_test)[:, 1]
     y_true = y_test.to_numpy()
-    thresholds = np.arange(0.01, 0.99, 0.01)
+    thresholds = np.arange(0.01, 1.01, 0.01)
+    curve = portfolio_profit_curve(
+        p_default,
+        y_true,
+        thresholds,
+        INTEREST_REVENUE,
+        LOSS_AMOUNT,
+        servicing_cost=SERVICE_COST,
+        fn_loss_multiplier=FN_LOSS_MULTIPLIER,
+    )
 
-    profits = []
-    for t in thresholds:
-        approved = p_default < t
-        if approved.sum() == 0:
-            profits.append(0)
-            continue
-        approved_defaults = y_true[approved] == 1
-        approved_non_defaults = ~approved_defaults
-
-        gains = approved_non_defaults.sum() * INTEREST_REVENUE
-        losses = approved_defaults.sum() * LOSS_AMOUNT * FN_LOSS_MULTIPLIER
-        profits.append(gains - losses)
-
-    profits = np.array(profits)
-    best_t = thresholds[np.argmax(profits)]
-    best_profit = profits[np.argmax(profits)]
+    best_idx = int(curve["portfolio_profit"].to_numpy().argmax())
+    best_t = float(curve.loc[best_idx, "threshold"])
+    best_profit = float(curve.loc[best_idx, "portfolio_profit"])
+    approve_all_profit = float(
+        curve.loc[np.isclose(curve["threshold"], 1.0), "portfolio_profit"].iloc[0]
+    )
 
     joblib.dump(best_t, "src/models/optimal_threshold.joblib")
     print(f"Optimal threshold: {best_t:.2f}")
     print(f"Max portfolio profit: ${best_profit:,.0f}")
     print(f"Approval rate at optimal: {(p_default < best_t).mean():.1%}")
+    print(f"Profit at 100% approval: ${approve_all_profit:,.0f}")
 
     return best_t, best_profit
 

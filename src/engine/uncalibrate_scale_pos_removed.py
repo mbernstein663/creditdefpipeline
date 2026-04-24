@@ -1,13 +1,23 @@
 import os
+import sys
 import joblib
 import numpy as np
 import pandas as pd
 import yaml
+from pathlib import Path
+import matplotlib
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import brier_score_loss
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
+from src.engine.profit import portfolio_profit_curve, profit_params
 
 
 def load_config(path="config.yaml"):
@@ -84,41 +94,40 @@ def evaluate_calibration(model, X_test, y_test):
     os.makedirs("evaluation/plots", exist_ok=True)
     plt.tight_layout()
     plt.savefig("evaluation/plots/calibration_curve1.png", dpi=150)
-    plt.show()
+    plt.close(fig)
 
     return brier
 
 
 def optimize_threshold(model, X_test, y_test, config):
-    AVG_LOAN = config["profit"]["avg_loan_amount"]
-    INTEREST_REVENUE = (AVG_LOAN
-                        * config["profit"]["avg_interest_rate"]
-                        * config["profit"]["avg_loan_term_years"])
-    LOSS_AMOUNT = AVG_LOAN * config["profit"]["loss_given_default"]
+    INTEREST_REVENUE, LOSS_AMOUNT, SERVICE_COST, FN_LOSS_MULTIPLIER = profit_params(config)
 
     p_default = model.predict_proba(X_test)[:, 1]
-    thresholds = np.arange(0.01, 0.99, 0.01)
+    y_true = y_test.to_numpy()
+    thresholds = np.arange(0.01, 1.01, 0.01)
+    curve = portfolio_profit_curve(
+        p_default,
+        y_true,
+        thresholds,
+        INTEREST_REVENUE,
+        LOSS_AMOUNT,
+        servicing_cost=SERVICE_COST,
+        fn_loss_multiplier=FN_LOSS_MULTIPLIER,
+    )
 
-    profits = []
-    for t in thresholds:
-        approved = p_default < t
-        if approved.sum() == 0:
-            profits.append(0)
-            continue
-        p = p_default[approved]
-        profits.append(
-            ((1 - p) * INTEREST_REVENUE - p * LOSS_AMOUNT).sum()
-        )
-
-    profits = np.array(profits)
-    best_t = thresholds[np.argmax(profits)]
-    best_profit = profits[np.argmax(profits)]
+    best_idx = int(curve["portfolio_profit"].to_numpy().argmax())
+    best_t = float(curve.loc[best_idx, "threshold"])
+    best_profit = float(curve.loc[best_idx, "portfolio_profit"])
+    approve_all_profit = float(
+        curve.loc[np.isclose(curve["threshold"], 1.0), "portfolio_profit"].iloc[0]
+    )
 
     joblib.dump(best_t, "src/models/optimal_threshold.joblib")
 
     print(f"\nOptimal threshold:    {best_t:.2f}")
     print(f"Max portfolio profit: ${best_profit:,.0f}")
     print(f"Approval rate:        {(p_default < best_t).mean():.1%}")
+    print(f"Profit at 100% approval: ${approve_all_profit:,.0f}")
 
     return best_t, best_profit
 

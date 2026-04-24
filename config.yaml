@@ -13,7 +13,10 @@ profit:
   avg_interest_rate: 0.130928
   avg_loan_term_years: 3.5759
   loss_given_default: 0.697345
-  # false_negative_loss_multiplier: 1.15
+  avg_net_revenue_if_repaid: 2323.41
+  avg_net_loss_if_default: 7403.41
+  servicing_cost_per_loan: 0.0
+  false_negative_loss_multiplier: 1.25
 paths:
   models_dir: evaluation/
   reports_dir: evaluation/reports/

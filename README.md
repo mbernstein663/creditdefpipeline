@@ -4,144 +4,103 @@ End-to-end credit risk decision engine with ML pipeline and profit optimization.
 
 ## Data Dictionary
 
+The project uses LendingClub accepted-loan data and frames the prediction task as:
 
-## The Model Setup
+- `0`: repaid
+- `1`: default
 
-We define our binary target variable as "Repaid" (0) or "Default" (1). Approximately 20% of all loans are defaulted, therefore we need to be cautious about using accuracy as a success proxy.
+The finalized modeling set contains 46 features and about 1.3M loans.
 
-We then performed some basic EDA and could quickly notice some correlation between default rates and loan grade & debt-to-income ratio. Higher grade loans are defaulted less, and higher DTI loans are defaulted more. No surprises there.
+## Model Setup
 
-We then cleaned column formatting, removed nulls, and engineered some new features like Loan-to-income (LTI), FICO midpoint, and some behavioral flags like derogatory public record.
+This is a binary classification problem with moderate dimensionality, a large sample, and an imbalanced target at roughly 80/20 non-default/default. The repo uses a train/validation/test split configured in `config.yaml` and compares three baseline models:
 
-Our finalized dataset has 46 columns with ~1.3M documented loans.
+- Logistic Regression
+- XGBoost
+- Neural Network
 
-## Model Selection + Results
+## Baseline Model Results
 
-We now have a binary classification problem with reasonable dimensionality, lots of examples, and class 80-20 imbalance. In our `config.yaml` we set test size to 20% and validation to 10% with 5 cross-validation folds. We then use a standard scaler to scale the validation and test set using the spread of `X_train`. 
+Measured by AUC:
 
-We kept the modelling relatively conservative & used three binary classification staples: standard log regression, XGBoost, and a neural network classifier. In a real business environment, we would repeat with more models and a hyperparameter search for more effective profit maximization.
+- XGBoost: `0.722`
+- Neural Network: `0.715`
+- Logistic Regression: `0.711`
 
-## The Model Results
+XGBoost was selected for the downstream profit optimization workflow.
 
-We evaluated our models using AUC:
-XGBoost: 0.722
-Neural Network: 0.715
-Logistic Regression: 0.711
+## Profit Optimization
 
-We then saved our pytorch and scikit models.
+Notebook `notebooks/04_profit_optimization.ipynb` builds the business decision layer on top of the model. The repo now uses a single shared profit module, [`src/engine/profit.py`](/c:/Users/micro/Documents/creditdefpipeline/src/engine/profit.py:1), so notebook logic, evaluation scripts, and the decision engine all score loans the same way.
 
-## Model Re-Evaluation
+### What Was Wrong
 
-In notebook 4, we chose XGBoost by AUC and aimed to optimize profits by performing more rigorous evaluation. In `profit_config.py` we defined the average loan amount, interest rate, loan length, and resulting loss from a default, then relayed results to `config.yaml`. We calculated average interest revenue and loss amounts using those numbers, then used our model trained in `03_baseline_models.ipynb` to get soft default probabilities on our test set. We then calculated expected profits per loan and created the profit curve, which plots the portfolio profits vs. decision threshold to find the optimized threshold. 
+The original pipeline had two separate problems:
 
-We then use our results to devise a decision engine that calculates a softmax probability of defaulting, and decides whether to approve/deny the loan based on our predicted profits.
+1. The threshold curve in notebook `04` summed model-estimated expected profit rather than realized held-out profit.
+2. The unit economics were too optimistic. Successful loans were credited with simple-interest revenue on the full balance for the full term, while defaults only lost unrecovered principal.
 
-We got profitable results, but there is evidence of under-approval form our Risk-segment analysis:
+That made the portfolio curve look unrealistically strong at very high approval rates, including near-100% approval.
 
---- Risk segment analysis ---
-                  loan_count  avg_p_default  avg_expected_profit  actual_default_rate
-risk_segment                                                                         
-Very Low (<10%)         5891          0.077          5697.641113                0.019
-Low (10-20%)           20982          0.155          4325.985840                0.042
-Medium (20-30%)        33773          0.253          2600.538086                0.076
-High (30-50%)          93955          0.403           -17.466999                0.145
-Very High (>50%)      114461          0.634         -4067.008057                0.319
+### What Changed
 
-It seems like our model is systematically over-approving loans.
+- [`src/data/profit_config.py`](/c:/Users/micro/Documents/creditdefpipeline/src/data/profit_config.py:1) now computes cashflow-based payoff assumptions from the raw CSV.
+- `config.yaml` now stores:
+  - `avg_net_revenue_if_repaid`
+  - `avg_net_loss_if_default`
+  - `servicing_cost_per_loan`
+  - `false_negative_loss_multiplier`
+- [`notebooks/04_profit_optimization.ipynb`](/c:/Users/micro/Documents/creditdefpipeline/notebooks/04_profit_optimization.ipynb:1) now plots realized portfolio P&L across thresholds and includes the `1.00` threshold explicitly.
+- [`src/engine/calibrate.py`](/c:/Users/micro/Documents/creditdefpipeline/src/engine/calibrate.py:1), [`src/engine/decision.py`](/c:/Users/micro/Documents/creditdefpipeline/src/engine/decision.py:1), [`src/engine/uncalibrate_scale_pos_removed.py`](/c:/Users/micro/Documents/creditdefpipeline/src/engine/uncalibrate_scale_pos_removed.py:1), and [`evaluation/eval.py`](/c:/Users/micro/Documents/creditdefpipeline/evaluation/eval.py:1) now all use the same shared profit math.
 
-### Calibration/Scale Fix
+## Updated Economics
 
-Our XGB model initially chose 0.34 as the optimal threshold with a maximum portfolio profit of $137M (~$100 profit per loan.) versus a $38M profit at the baseline approval threshold of 0.50. However, our initial XGBoost probabilities were systematically overconfident 
-(predicted 0.63 default rate where actual was 0.31). 
+After regenerating the config from the raw data:
 
-We ran diagnostic checks for model efficiency- our original analysis yielded a contextually valid SHAP analysis but poor calibration analysis. Our results yielded:
+- `avg_net_revenue_if_repaid`: `$2,323.41`
+- `avg_net_loss_if_default`: `$7,403.41`
+- `false_negative_loss_multiplier`: `1.25x`
 
---- Calibration Check ---
-Brier score: 0.2144 (lower is better, 0.25 = random)
-Predicted 0.08 → Actual 0.02 (overpredicting by 0.06)
-Predicted 0.16 → Actual 0.04 (overpredicting by 0.11)
-Predicted 0.25 → Actual 0.08 (overpredicting by 0.18)
-Predicted 0.35 → Actual 0.12 (overpredicting by 0.23)
-Predicted 0.45 → Actual 0.17 (overpredicting by 0.28)
-Predicted 0.55 → Actual 0.24 (overpredicting by 0.31)
-Predicted 0.65 → Actual 0.32 (overpredicting by 0.33)
-Predicted 0.74 → Actual 0.43 (overpredicting by 0.31)
-Predicted 0.83 → Actual 0.57 (overpredicting by 0.26)
-Predicted 0.91 → Actual 0.75 (overpredicting by 0.16)
+This puts the break-even default probability at about `20.1%`, versus roughly `40.2%` under the earlier simplified assumptions.
 
-Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was being too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins. Our residual analysis corroborated this:
+## Updated Results
 
---- Residual Analysis ---
+Running [`src/engine/calibrate.py`](/c:/Users/micro/Documents/creditdefpipeline/src/engine/calibrate.py:1) after the fix produced:
 
-Mean residual by DTI bucket (negative = overpredicting default):
-dti_bucket
-0-10    -0.2288
-10-20   -0.2472
-20-30   -0.2739
-30-40   -0.2908
-40+     -0.2944
+- Brier score (raw): `0.1436`
+- Brier score (calibrated): `0.1443`
+- Optimal threshold: `0.18`
+- Max portfolio profit: `$160,392,472`
+- Approval rate at optimal: `58.6%`
+- Profit at 100% approval: `$3,281,396`
 
-Mean residual by FICO bucket:
-fico_bucket
-620-660   -0.2874
-660-700   -0.2785
-700-740   -0.2269
-740+      -0.1629
+The key improvement is the last line: approve-all is no longer "hugely profitable." It is now close to flat, which is much more plausible for this dataset and payoff model.
 
-Mean residual by term:
-term
-36   -0.2411
-60   -0.3033
+Running [`evaluation/eval.py`](/c:/Users/micro/Documents/creditdefpipeline/evaluation/eval.py:1) reports:
 
-Overall mean residual: -0.2561
+- AUC: `0.7194`
+- Brier score: `0.1436`
+- Optimal threshold: `0.18`
+- Approval rate: `51.3%`
+- Portfolio profit: `$157,317,507`
+- 100% approval P&L: `$3,281,396`
 
-The mean residual error overly penalizes by dti buckets, term length, and fico buckets. (i.e. the model tells us for 60-year term `actual default probability` - `estimated default probability` = -0.30, meaning the actual default rate was 30% lower than we estimated).
-The model shows clear indication of over-conservative defaulting estimates- which could lead to significant profit reduction. We will troubleshoot this by analyzing class imbalances (there are less defaulters than non-defaulters, which may be affecting model results).
+## Calibration Notes
 
-We fixed this by including class calibration, which adjusts the predictions from cost-weighted model scores into probabilities that reflect the true default rate in the population, restoring alignment between predicted and observed default frequencies across risk buckets.
-This yielded the following calibration curves:
+The earlier XGBoost configuration also over-penalized the positive class because of `scale_pos_weight=(all y=0)/(all y=1)`. For this use case, removing `scale_pos_weight` improved the score distribution and produced more useful probabilities for profit-based decisions.
+
+Calibration is still part of the workflow, but the repo now treats these as separate concerns:
+
+- calibration fixes probability alignment
+- profit modeling fixes payoff assumptions
+
+The calibration curve is saved at:
+
 ![Calibration Plot](evaluation/plots/calibration_curve.png)
 
-We can see that the calibrated data is fitting extremely well until the probabilities get high- it seems that calibration alone does not fix our model and there may still be some underlying issues with our data or XGB model.
+## What Was Learned
 
-I went back to `03_baseline_models.ipynb` to debug and fish through the code for possible breaking points. After looking through, I recognized that the overcompensating discrepancy was brought by `scale_pos_weight=(all y=0)/(all y=1)`. Although `scale_pos_weight` is designed to help compensate for class imbalances, it gives additional weight to loans that actually did default but were classified as safe (FPs). This can be okay when optimizing precision and F1 score, but has reductive impacts when optimizing for profits and when each positive has an associated number attached to a success.
-
-We commented out `scale_pos_weight` and our profit increased tenfold (our model was willing to inherit more calculated risk since it was not penalized as heavy for a misclassification). Our new risk segment analysis yielded:
-
-Risk segment analysis:
-                  loan_count  avg_p_default  avg_expected_profit  actual_default_rate
-risk_segment                                                                         
-Very Low (<10%)        63086          0.063          5936.731934                0.060
-Low (10-20%)           91230          0.148          4449.655762                0.146
-Medium (20-30%)        62457          0.245          2746.018066                0.247
-High (30-50%)          45482          0.375           467.338013                0.380
-Very High (>50%)        6807          0.558         -2741.462891                0.567
-
-Our new maximization threshold settled at 0.40
-
-Unfortunately, there is still an issue with our result. The portfolio profit vs. decision threshold is now underestimating the losses per and considers 100% acceptance to still be hugely profitable. 
-
-Our calibration results yielded:
-
-Brier score (raw):        0.1436
-Brier score (calibrated): 0.1443
-Optimal threshold: 0.40
-Max portfolio profit: $1,005,757,308
-Approval rate at optimal: 90.9%
-
-Which is good- but only on paper! A 90% approval rate with hardly any profit downswing beyond 0.40 threshold is not realistic and our model is undercalculating the effect of a defaulted loan. The losses per loan calculations were shoddy and not based on real firm losses that inherit
-
-# What Was Learned
-
-- A calibration check is a diagnostic tool, not a tell all about underlying errors. Don't jump straight into isotonic/sigmoid calibration methods without performing EDA/hyperparameter searches unless you have a strong AUC. This is because the AUC tells us the probability of ranking a random positive over a random negative (i.e. how frequently is my model saying this [actual 1] is more likely to be a 0 than this [actual 0]- and vice versa). With a strong AUC (let's say, 0.85) the model is mostly (85% of the time) correctly ranking probabilities, meaning the activation function may just need some calibration to properly boost the raw probabilities and correctly assign a 1 or 0.
-- Do not use `scale_pos_weight` ("tipping the scale") unless there is certainty about the distribution of 1s and 0s in the actual target variable. If strong scale adjustment is needed (i.e. there's a very low chance of defaulting, like with fraud) we may want to try anomaly detection as an alternative.
-
-
-Post-calibration results:
-- Brier score: [add updated score]
-- Optimal threshold: 0.34
-- Portfolio profit: $659M (+4.7x vs. uncalibrated)
-
-The profit improvement reflects the uncalibrated model 
-incorrectly rejecting ~57% of profitable loans (86% approval 
-post-calibration vs. 29% pre-calibration).
+- Calibration alone does not validate a business decision system.
+- Portfolio backtests should be reported on realized held-out outcomes, not just expected value from the model scores.
+- Simple-interest revenue and principal-only LGD can materially overstate lender profitability on amortizing consumer loans.
+- Class weighting should be used carefully when the downstream objective is portfolio P&L rather than recall or F1.
