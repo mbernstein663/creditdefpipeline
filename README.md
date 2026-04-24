@@ -32,7 +32,9 @@ We then saved our pytorch and scikit models.
 
 ## Model Re-Evaluation
 
-In notebook 4, we chose XGBoost by AUC and aimed to optimize profits by performing more rigorous evaluation. In `config.yaml` we defined  
+In notebook 4, we chose XGBoost by AUC and aimed to optimize profits by performing more rigorous evaluation. In `profit_config.py` we defined the average loan amount, interest rate, loan length, and resulting loss from a default, then relayed results to `config.yaml`. We calculated average interest revenue and loss amounts using those numbers, then used our model trained in `03_baseline_models.ipynb` to get soft default probabilities on our test set. We then calculated expected profits per loan and created the profit curve, which plots the portfolio profits vs. decision threshold to find the optimized threshold. 
+
+We then use our results to devise a decision engine that calculates a softmax probability of defaulting, and decides whether to approve/deny the loan based on our predicted profits.
 
 ## Feedback + Errors
 

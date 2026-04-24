@@ -3,19 +3,16 @@ data:
   processed_dir: data/processed/
   features_dir: data/features/
   lending_club_file: accepted_2007_to_2018Q4.csv
-
 model:
   random_seed: 42
   test_size: 0.2
   val_size: 0.1
   cv_folds: 5
-
 profit:
-  avg_loan_amount: 15000
-  avg_interest_rate: 0.12
-  avg_loan_term_years: 3
-  loss_given_default: 0.70
-
+  avg_loan_amount: 15046.93
+  avg_interest_rate: 0.130928
+  avg_loan_term_years: 3.5759
+  loss_given_default: 0.697345
 paths:
   models_dir: evaluation/
   reports_dir: evaluation/reports/
