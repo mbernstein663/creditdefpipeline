@@ -4,17 +4,28 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn import base
 import yaml
 from sklearn.calibration import CalibratedClassifierCV, calibration_curve
 from sklearn.model_selection import train_test_split
-from xgboost import XGBClassifier
+from sklearn.frozen import FrozenEstimator
 import matplotlib.pyplot as plt
 
 
 def load_config(path="config.yaml"):
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def profit_params(config):
+    avg_loan = config["profit"]["avg_loan_amount"]
+    int_rate = config["profit"]["avg_interest_rate"]
+    term_yrs = config["profit"]["avg_loan_term_years"]
+    lgd = config["profit"]["loss_given_default"]
+    fn_loss_multiplier = config["profit"].get("false_negative_loss_multiplier", 1.0)
+
+    interest_revenue = avg_loan * int_rate * term_yrs
+    loss_amount = avg_loan * lgd
+    return interest_revenue, loss_amount, fn_loss_multiplier
 
 
 def build_and_calibrate(config):
@@ -33,32 +44,17 @@ def build_and_calibrate(config):
         random_state=SEED, stratify=y_temp
     )
 
-    # ── Train base model with your original hyperparameters ──────────────
-    # NOTE: Remove scale_pos_weight — this was the calibration bias source.
-    # Use class_weight-aware eval metric instead.
-    base = XGBClassifier(
-        n_estimators=300,
-        max_depth=5,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        # scale_pos_weight REMOVED — this was causing overestimation
-        random_state=SEED,
-        eval_metric="auc",
-        early_stopping_rounds=20,
-        verbosity=0
-    )
-    base.fit(X_train, y_train,
-             eval_set=[(X_val, y_val)],
-             verbose=False)
-
-    print(f"Base model AUC: check notebook 03 benchmark")
+    model_path = "src/models/xgboost_model.joblib"
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(
+            "Missing src/models/xgboost_model.joblib. "
+            "Run notebooks/03_baseline_models.ipynb first to train and save the model."
+        )
+    base = joblib.load(model_path)
+    print("Loaded base XGBoost model from src/models/xgboost_model.joblib")
 
     # ── Calibrate using isotonic on held-out validation set ───────────────
     # We calibrate on val, evaluate on test — no leakage
-    from sklearn.calibration import CalibratedClassifierCV
-    from sklearn.frozen import FrozenEstimator
-
     calibrated = CalibratedClassifierCV(
         estimator=FrozenEstimator(base),
         method="sigmoid"  # or "isotonic"
@@ -106,12 +102,10 @@ def plot_calibration(base, calibrated, X_test, y_test):
 
 
 def optimize_threshold(calibrated, X_test, y_test, config):
-    AVG_LOAN = config["profit"]["avg_loan_amount"]
-    INTEREST_REVENUE = AVG_LOAN * config["profit"]["avg_interest_rate"] \
-                                * config["profit"]["avg_loan_term_years"]
-    LOSS_AMOUNT = AVG_LOAN * config["profit"]["loss_given_default"]
+    INTEREST_REVENUE, LOSS_AMOUNT, FN_LOSS_MULTIPLIER = profit_params(config)
 
     p_default = calibrated.predict_proba(X_test)[:, 1]
+    y_true = y_test.to_numpy()
     thresholds = np.arange(0.01, 0.99, 0.01)
 
     profits = []
@@ -120,8 +114,12 @@ def optimize_threshold(calibrated, X_test, y_test, config):
         if approved.sum() == 0:
             profits.append(0)
             continue
-        p = p_default[approved]
-        profits.append(((1 - p) * INTEREST_REVENUE - p * LOSS_AMOUNT).sum())
+        approved_defaults = y_true[approved] == 1
+        approved_non_defaults = ~approved_defaults
+
+        gains = approved_non_defaults.sum() * INTEREST_REVENUE
+        losses = approved_defaults.sum() * LOSS_AMOUNT * FN_LOSS_MULTIPLIER
+        profits.append(gains - losses)
 
     profits = np.array(profits)
     best_t = thresholds[np.argmax(profits)]

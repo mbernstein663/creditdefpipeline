@@ -36,9 +36,25 @@ In notebook 4, we chose XGBoost by AUC and aimed to optimize profits by performi
 
 We then use our results to devise a decision engine that calculates a softmax probability of defaulting, and decides whether to approve/deny the loan based on our predicted profits.
 
-## Feedback + Errors
+We got profitable results, but there is evidence of under-approval form our Risk-segment analysis:
 
-Our original analysis yielded a contextually valid SHAP analysis but poor calibration analysis. Our results yielded:
+--- Risk segment analysis ---
+                  loan_count  avg_p_default  avg_expected_profit  actual_default_rate
+risk_segment                                                                         
+Very Low (<10%)         5891          0.077          5697.641113                0.019
+Low (10-20%)           20982          0.155          4325.985840                0.042
+Medium (20-30%)        33773          0.253          2600.538086                0.076
+High (30-50%)          93955          0.403           -17.466999                0.145
+Very High (>50%)      114461          0.634         -4067.008057                0.319
+
+It seems like our model is systematically over-approving loans.
+
+### Calibration/Scale Fix
+
+Our XGB model initially chose 0.34 as the optimal threshold with a maximum portfolio profit of $137M (~$100 profit per loan.) versus a $38M profit at the baseline approval threshold of 0.50. However, our initial XGBoost probabilities were systematically overconfident 
+(predicted 0.63 default rate where actual was 0.31). 
+
+We ran diagnostic checks for model efficiency- our original analysis yielded a contextually valid SHAP analysis but poor calibration analysis. Our results yielded:
 
 --- Calibration Check ---
 Brier score: 0.2144 (lower is better, 0.25 = random)
@@ -53,7 +69,7 @@ Predicted 0.74 → Actual 0.43 (overpredicting by 0.31)
 Predicted 0.83 → Actual 0.57 (overpredicting by 0.26)
 Predicted 0.91 → Actual 0.75 (overpredicting by 0.16)
 
-Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was being too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins.
+Our calibration check is a robust check on the test net that indicates our model's tendency to overpredict probabilities. Our model was being too conservative with default rates (only 24% defaulted at an estimated 55% rate), which would have significantly reduced profit margins. Our residual analysis corroborated this:
 
 --- Residual Analysis ---
 
@@ -78,23 +94,48 @@ term
 60   -0.3033
 
 Overall mean residual: -0.2561
-Residual analysis complete.
 
-Our residual analysis corroborates this. The mean residual error overly penalizes by dti buckets, term length, and fico buckets. (i.e. the model tells us for 60-year term `actual default probability` - `estimated default probability` = -0.30, meaning the actual default rate was 30% lower than we estimated).
+The mean residual error overly penalizes by dti buckets, term length, and fico buckets. (i.e. the model tells us for 60-year term `actual default probability` - `estimated default probability` = -0.30, meaning the actual default rate was 30% lower than we estimated).
 The model shows clear indication of over-conservative defaulting estimates- which could lead to significant profit reduction. We will troubleshoot this by analyzing class imbalances (there are less defaulters than non-defaulters, which may be affecting model results).
 
-We fixed this by including class calibration, which adjusts the predicions ...
+We fixed this by including class calibration, which adjusts the predictions from cost-weighted model scores into probabilities that reflect the true default rate in the population, restoring alignment between predicted and observed default frequencies across risk buckets.
 This yielded the following calibration curves:
 ![Calibration Plot](evaluation/plots/calibration_curve.png)
 
-We can see that the calibrated data is fitting extremely well until the probabilities get high- this calibrated model is overfitting because we are using the same data for calbration and did not create an additional calibration set.
+We can see that the calibrated data is fitting extremely well until the probabilities get high- it seems that calibration alone does not fix our model and there may still be some underlying issues with our data or XGB model.
 
-## Model Development Notes
+I went back to `03_baseline_models.ipynb` to debug and fish through the code for possible breaking points. After looking through, I recognized that the overcompensating discrepancy was brought by `scale_pos_weight=(all y=0)/(all y=1)`. Although `scale_pos_weight` is designed to help compensate for class imbalances, it gives additional weight to loans that actually did default but were classified as safe (FPs). This can be okay when optimizing precision and F1 score, but has reductive impacts when optimizing for profits and when each positive has an associated number attached to a success.
 
-### Calibration Fix
+We commented out `scale_pos_weight` and our profit increased tenfold (our model was willing to inherit more calculated risk since it was not penalized as heavy for a misclassification). Our new risk segment analysis yielded:
 
-Initial XGBoost probabilities were systematically overconfident 
-(predicted 0.55 default rate where actual was 0.24). 
+Risk segment analysis:
+                  loan_count  avg_p_default  avg_expected_profit  actual_default_rate
+risk_segment                                                                         
+Very Low (<10%)        63086          0.063          5936.731934                0.060
+Low (10-20%)           91230          0.148          4449.655762                0.146
+Medium (20-30%)        62457          0.245          2746.018066                0.247
+High (30-50%)          45482          0.375           467.338013                0.380
+Very High (>50%)        6807          0.558         -2741.462891                0.567
+
+Our new maximization threshold settled at 0.40
+
+Unfortunately, there is still an issue with our result. The portfolio profit vs. decision threshold is now underestimating the losses per and considers 100% acceptance to still be hugely profitable. 
+
+Our calibration results yielded:
+
+Brier score (raw):        0.1436
+Brier score (calibrated): 0.1443
+Optimal threshold: 0.40
+Max portfolio profit: $1,005,757,308
+Approval rate at optimal: 90.9%
+
+Which is good- but only on paper! A 90% approval rate with hardly any profit downswing beyond 0.40 threshold is not realistic and our model is undercalculating the effect of a defaulted loan. The losses per loan calculations were shoddy and not based on real firm losses that inherit
+
+# What Was Learned
+
+- A calibration check is a diagnostic tool, not a tell all about underlying errors. Don't jump straight into isotonic/sigmoid calibration methods without performing EDA/hyperparameter searches unless you have a strong AUC. This is because the AUC tells us the probability of ranking a random positive over a random negative (i.e. how frequently is my model saying this [actual 1] is more likely to be a 0 than this [actual 0]- and vice versa). With a strong AUC (let's say, 0.85) the model is mostly (85% of the time) correctly ranking probabilities, meaning the activation function may just need some calibration to properly boost the raw probabilities and correctly assign a 1 or 0.
+- Do not use `scale_pos_weight` ("tipping the scale") unless there is certainty about the distribution of 1s and 0s in the actual target variable. If strong scale adjustment is needed (i.e. there's a very low chance of defaulting, like with fraud) we may want to try anomaly detection as an alternative.
+
 
 Post-calibration results:
 - Brier score: [add updated score]
@@ -104,25 +145,3 @@ Post-calibration results:
 The profit improvement reflects the uncalibrated model 
 incorrectly rejecting ~57% of profitable loans (86% approval 
 post-calibration vs. 29% pre-calibration).
-
-### Was Calibration Even Necessary?
-
-It turns out that our problem diagnosis was backwards. We misatrributed the 
-
-### What happened?
-
-AUC:              0.7194
-Brier score:      0.1436
-Optimal threshold:0.34
-Approval rate:    86.3%
-Portfolio profit: $741,673,984
-Test set size:    269,062 loans
-
-## Model retraining
-
-In initial coding, we used model retraining and test/train re-splitting at each stage. We adapted and changed to .joblib and .pt structure in \src\models to preserve reproducibility and save time.
-
-# What Was Learned
-
-- A calibration check is a diagnostic tool, not a tell all about underlying errors. Don't jump straight into isotonic/sigmoid calibration methods without performing EDA/hyperparameter searches unless you have a strong AUC. This is because the AUC tells us the probability of ranking a random positive over a random negative (i.e. how frequently is my model saying this [actual 1] is more likely to be a 0 than this [actual 0]- and vice versa). With a strong AUC (let's say, 0.85) the model is mostly (85% of the time) correctly ranking probabilities, meaning the activation function may just need some calibration to properly boost the raw probabilities and correctly assign a 1 or 0.
-- Do not use `scale_pos_weight` ("tipping the scale") unless there is certainty about the distribution of 1s and 0s in the actual target variable. If strong scale adjustment is needed (i.e. there's a very low chance of defaulting, like with fraud) we may want to try anomaly detection as an alternative.

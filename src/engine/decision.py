@@ -4,7 +4,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from xgboost import XGBClassifier
+from sklearn.frozen import FrozenEstimator
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import train_test_split
 
@@ -13,8 +13,20 @@ def load_config(config_path="config.yaml"):
         return yaml.safe_load(f)
 
 
+def profit_params(config):
+    avg_loan = config["profit"]["avg_loan_amount"]
+    int_rate = config["profit"]["avg_interest_rate"]
+    term_yrs = config["profit"]["avg_loan_term_years"]
+    lgd = config["profit"]["loss_given_default"]
+    fn_loss_multiplier = config["profit"].get("false_negative_loss_multiplier", 1.0)
+
+    interest_revenue = avg_loan * int_rate * term_yrs
+    loss_amount = avg_loan * lgd
+    return interest_revenue, loss_amount, fn_loss_multiplier
+
+
 def calibrate_and_save(config):
-    print("Loading data for CV-based calibration...")
+    print("Loading data for calibration...")
 
     df = pd.read_parquet(config["data"]["features_dir"] + "features.parquet")
     X = df.drop(columns=["default"])
@@ -22,31 +34,37 @@ def calibrate_and_save(config):
 
     SEED = config["model"]["random_seed"]
     TEST_SIZE = config["model"]["test_size"]
-    CV_FOLDS = config["model"]["cv_folds"]
 
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_temp, X_test, y_temp, y_test = train_test_split(
         X,
         y,
         test_size=TEST_SIZE,
         random_state=SEED,
         stratify=y
     )
-
-    # Load the already-chosen XGBoost hyperparameters if you have them saved somewhere.
-    # Otherwise define them here to match your original trained model as closely as possible.
-    base_model = XGBClassifier(
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp,
+        y_temp,
+        test_size=config["model"]["val_size"],
         random_state=SEED,
-        eval_metric="logloss"
+        stratify=y_temp
     )
+
+    model_path = "src/models/xgboost_model.joblib"
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(
+            "Missing src/models/xgboost_model.joblib. "
+            "Run notebooks/03_baseline_models.ipynb first."
+        )
+    base_model = joblib.load(model_path)
 
     cal_model = CalibratedClassifierCV(
-        estimator=base_model,
-        method="sigmoid",
-        cv=CV_FOLDS
+        estimator=FrozenEstimator(base_model),
+        method="sigmoid"
     )
 
-    print("Fitting CV-calibrated model...")
-    cal_model.fit(X_train, y_train)
+    print("Fitting calibrated model on held-out validation set...")
+    cal_model.fit(X_val, y_val)
 
     os.makedirs("src/models", exist_ok=True)
     joblib.dump(cal_model, "src/models/calibrated_xgboost_model.joblib")
@@ -60,15 +78,10 @@ def calibrate_and_save(config):
 def optimize_threshold(cal_model, X_test, y_test, config):
     print("Reoptimizing threshold on calibrated probabilities...")
 
-    AVG_LOAN = config["profit"]["avg_loan_amount"]
-    INT_RATE = config["profit"]["avg_interest_rate"]
-    TERM_YRS = config["profit"]["avg_loan_term_years"]
-    LGD = config["profit"]["loss_given_default"]
-
-    INTEREST_REVENUE = AVG_LOAN * INT_RATE * TERM_YRS
-    LOSS_AMOUNT = AVG_LOAN * LGD
+    INTEREST_REVENUE, LOSS_AMOUNT, FN_LOSS_MULTIPLIER = profit_params(config)
 
     p_default = cal_model.predict_proba(X_test)[:, 1]
+    y_true = y_test.to_numpy()
 
     thresholds = np.arange(0.01, 0.99, 0.01)
     portfolio_profits = []
@@ -79,8 +92,14 @@ def optimize_threshold(cal_model, X_test, y_test, config):
             portfolio_profits.append(0)
             continue
 
-        p_approved = p_default[approved]
-        profit = ((1 - p_approved) * INTEREST_REVENUE - p_approved * LOSS_AMOUNT).sum()
+        approved_defaults = y_true[approved] == 1
+        approved_non_defaults = ~approved_defaults
+
+        # Realized profit on held-out data:
+        # non-default approvals earn interest, false-negative defaults incur amplified loss.
+        gains = approved_non_defaults.sum() * INTEREST_REVENUE
+        losses = approved_defaults.sum() * LOSS_AMOUNT * FN_LOSS_MULTIPLIER
+        profit = gains - losses
         portfolio_profits.append(profit)
 
     portfolio_profits = np.array(portfolio_profits)
@@ -103,17 +122,14 @@ def make_decision(loan_features: dict, config_path="config.yaml") -> dict:
     cal_model = joblib.load("src/models/calibrated_xgboost_model.joblib")
     threshold = joblib.load("src/models/optimal_threshold_calibrated.joblib")
 
-    AVG_LOAN = config["profit"]["avg_loan_amount"]
-    INT_RATE = config["profit"]["avg_interest_rate"]
-    TERM_YRS = config["profit"]["avg_loan_term_years"]
-    LGD = config["profit"]["loss_given_default"]
-
-    INTEREST_REVENUE = AVG_LOAN * INT_RATE * TERM_YRS
-    LOSS_AMOUNT = AVG_LOAN * LGD
+    INTEREST_REVENUE, LOSS_AMOUNT, FN_LOSS_MULTIPLIER = profit_params(config)
 
     X = pd.DataFrame([loan_features])
     p_default = float(cal_model.predict_proba(X)[0, 1])
-    expected_profit = (1 - p_default) * INTEREST_REVENUE - p_default * LOSS_AMOUNT
+    expected_profit = (
+        (1 - p_default) * INTEREST_REVENUE
+        - p_default * LOSS_AMOUNT * FN_LOSS_MULTIPLIER
+    )
 
     return {
         "decision": "APPROVE" if p_default < threshold else "DENY",
@@ -129,55 +145,3 @@ if __name__ == "__main__":
 
     print("\nDecision engine ready.")
     print(f"Using calibrated model with threshold: {optimal_threshold:.2f}")
-
-
-probs = cal_model.predict_proba(X_test)[:, 1]
-print(probs[:10])
-
-from sklearn.calibration import calibration_curve
-import matplotlib.pyplot as plt
-import joblib
-import pandas as pd
-
-cal_model = joblib.load("src/models/calibrated_xgboost_model.joblib")
-X_test = pd.read_parquet("src/models/X_test.parquet")
-y_test = pd.read_parquet("src/models/y_test.parquet")["default"]
-
-cal_probs = cal_model.predict_proba(X_test)[:, 1]
-
-frac_pos_cal, mean_pred_cal = calibration_curve(y_test, cal_probs, n_bins=10)
-
-plt.figure(figsize=(8, 6))
-plt.plot(mean_pred_cal, frac_pos_cal, "s-", label="XGBoost (CV-calibrated, sigmoid)")
-plt.plot([0, 1], [0, 1], "k--", label="Perfect calibration")
-plt.xlabel("Mean predicted probability")
-plt.ylabel("Fraction of positives")
-plt.title("Calibration curve")
-plt.legend()
-plt.tight_layout()
-plt.savefig("evaluation/plots/calibration_curve_cv_sigmoid.png")
-plt.show()
-
-
-import numpy as np
-import pandas as pd
-
-probs = cal_model.predict_proba(X_test)[:, 1]
-
-bins = np.linspace(0, 1, 11)
-bin_ids = np.digitize(probs, bins) - 1
-
-summary = []
-for i in range(10):
-    mask = bin_ids == i
-    n = mask.sum()
-    if n > 0:
-        mean_pred = probs[mask].mean()
-        frac_pos = y_test[mask].mean()
-    else:
-        mean_pred = np.nan
-        frac_pos = np.nan
-    summary.append([i, n, mean_pred, frac_pos])
-
-bin_df = pd.DataFrame(summary, columns=["bin", "count", "mean_pred", "frac_pos"])
-print(bin_df)
