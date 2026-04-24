@@ -2,9 +2,37 @@
 
 End-to-end credit risk decision engine with ML pipeline and profit optimization.
 
+## Data Dictionary
+
+
 ## The Model Setup
 
+We define our binary target variable as "Repaid" (0) or "Default" (1). Approximately 20% of all loans are defaulted, therefore we need to be cautious about using accuracy as a success proxy.
+
+We then performed some basic EDA and could quickly notice some correlation between default rates and loan grade & debt-to-income ratio. Higher grade loans are defaulted less, and higher DTI loans are defaulted more. No surprises there.
+
+We then cleaned column formatting, removed nulls, and engineered some new features like Loan-to-income (LTI), FICO midpoint, and some behavioral flags like derogatory public record.
+
+Our finalized dataset has 46 columns with ~1.3M documented loans.
+
+## Model Selection + Results
+
+We now have a binary classification problem with reasonable dimensionality, lots of examples, and class 80-20 imbalance. In our `config.yaml` we set test size to 20% and validation to 10% with 5 cross-validation folds. We then use a standard scaler to scale the validation and test set using the spread of `X_train`. 
+
+We kept the modelling relatively conservative & used three binary classification staples: standard log regression, XGBoost, and a neural network classifier. In a real business environment, we would repeat with more models and a hyperparameter search for more effective profit maximization.
+
 ## The Model Results
+
+We evaluated our models using AUC:
+XGBoost: 0.722
+Neural Network: 0.715
+Logistic Regression: 0.711
+
+We then saved our pytorch and scikit models.
+
+## Model Re-Evaluation
+
+In notebook 4, we chose XGBoost by AUC and aimed to optimize profits by performing more rigorous evaluation. In `config.yaml` we defined  
 
 ## Feedback + Errors
 
