@@ -2,6 +2,13 @@ import numpy as np
 import pandas as pd
 
 
+def _as_1d_float_array(values, name):
+    array = np.asarray(values, dtype=float).reshape(-1)
+    if np.isnan(array).any():
+        raise ValueError(f"{name} contains NaN values.")
+    return array
+
+
 def profit_params(config):
     profit_cfg = config["profit"]
 
@@ -33,7 +40,9 @@ def expected_profit_per_loan(
     servicing_cost=0.0,
     fn_loss_multiplier=1.0,
 ):
-    p_default = np.asarray(p_default, dtype=float)
+    p_default = _as_1d_float_array(p_default, "p_default")
+    if np.any((p_default < 0.0) | (p_default > 1.0)):
+        raise ValueError("p_default must stay within [0, 1].")
     p_repay = 1.0 - p_default
     return (
         p_repay * revenue_if_repaid
@@ -49,7 +58,9 @@ def realized_profit_per_loan(
     servicing_cost=0.0,
     fn_loss_multiplier=1.0,
 ):
-    y_true = np.asarray(y_true, dtype=int)
+    y_true = np.asarray(y_true, dtype=int).reshape(-1)
+    if np.any((y_true != 0) & (y_true != 1)):
+        raise ValueError("y_true must contain only 0 (repaid) or 1 (default).")
     repaid = y_true == 0
     defaulted = ~repaid
     return (
@@ -68,9 +79,14 @@ def portfolio_profit_curve(
     servicing_cost=0.0,
     fn_loss_multiplier=1.0,
 ):
-    p_default = np.asarray(p_default, dtype=float)
-    y_true = np.asarray(y_true, dtype=int)
-    thresholds = np.asarray(thresholds, dtype=float)
+    p_default = _as_1d_float_array(p_default, "p_default")
+    y_true = np.asarray(y_true, dtype=int).reshape(-1)
+    thresholds = _as_1d_float_array(thresholds, "thresholds")
+
+    if p_default.shape[0] != y_true.shape[0]:
+        raise ValueError("p_default and y_true must have the same length.")
+    if np.any((thresholds < 0.0) | (thresholds > 1.0)):
+        raise ValueError("thresholds must stay within [0, 1].")
 
     rows = []
     for threshold in thresholds:

@@ -22,7 +22,7 @@ from src.engine.profit import portfolio_profit_curve, profit_params
 
 
 def load_config(path="config.yaml"):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -77,7 +77,7 @@ def plot_calibration(base, calibrated, X_test, y_test):
 
     for probs, label, style in [
         (raw_probs, "XGBoost (raw)", "s-"),
-        (cal_probs, "XGBoost (isotonic calibrated)", "o-"),
+        (cal_probs, "XGBoost (sigmoid calibrated)", "o-"),
     ]:
         frac_pos, mean_pred = calibration_curve(y_test, probs, n_bins=20)
         ax.plot(mean_pred, frac_pos, style, label=label)
@@ -85,7 +85,7 @@ def plot_calibration(base, calibrated, X_test, y_test):
     ax.plot([0, 1], [0, 1], "k--", label="Perfect calibration")
     ax.set_xlabel("Mean predicted probability")
     ax.set_ylabel("Fraction of positives")
-    ax.set_title("Calibration curve: raw vs. isotonic")
+    ax.set_title("Calibration curve: raw vs. sigmoid")
     ax.legend()
 
     # Print Brier scores so they appear in the README

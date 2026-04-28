@@ -20,8 +20,9 @@ from src.engine.profit import (
     profit_params,
 )
 
+
 def load_config(config_path="config.yaml"):
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -67,11 +68,11 @@ def calibrate_and_save(config):
     cal_model.fit(X_val, y_val)
 
     os.makedirs("src/models", exist_ok=True)
-    joblib.dump(cal_model, "src/models/calibrated_xgboost_model.joblib")
+    joblib.dump(cal_model, "src/models/calibrated_model.joblib")
     X_test.to_parquet("src/models/X_test.parquet", index=False)
     y_test.to_frame(name="default").to_parquet("src/models/y_test.parquet", index=False)
 
-    print("Saved calibrated_xgboost_model.joblib")
+    print("Saved calibrated_model.joblib")
     return cal_model, X_test, y_test
 
 
@@ -101,7 +102,7 @@ def optimize_threshold(cal_model, X_test, y_test, config):
         curve.loc[np.isclose(curve["threshold"], 1.0), "portfolio_profit"].iloc[0]
     )
 
-    joblib.dump(optimal_threshold, "src/models/optimal_threshold_calibrated.joblib")
+    joblib.dump(optimal_threshold, "src/models/optimal_threshold.joblib")
 
     print(f"New threshold:         {optimal_threshold:.2f}")
     print(f"Max portfolio profit:  ${max_profit:,.0f}")
@@ -114,8 +115,8 @@ def optimize_threshold(cal_model, X_test, y_test, config):
 def make_decision(loan_features: dict, config_path="config.yaml") -> dict:
     config = load_config(config_path)
 
-    cal_model = joblib.load("src/models/calibrated_xgboost_model.joblib")
-    threshold = joblib.load("src/models/optimal_threshold_calibrated.joblib")
+    cal_model = joblib.load("src/models/calibrated_model.joblib")
+    threshold = joblib.load("src/models/optimal_threshold.joblib")
 
     INTEREST_REVENUE, LOSS_AMOUNT, SERVICE_COST, FN_LOSS_MULTIPLIER = profit_params(config)
 
